@@ -26,7 +26,7 @@ import gyro     # local file gyro.py
 
 # where is the data ? - set this to where you have it
 
-master_path_to_dataset = "/tmp/TTBB-durham-02-10-17-sub5"; # ** need to edit this **
+master_path_to_dataset = "TTBB-durham-02-10-17-sub10"; # ** need to edit this **
 directory_to_cycle = "left-images";     # edit this for left or right image set
 
 #####################################################################
@@ -122,14 +122,14 @@ for index, filename in enumerate(sorted(os.listdir(full_path_directory))):
 
         # for now diplay GPS/IMU data on image if we have it
 
-        if (len(gps_data) >= index):
+        if (len(gps_data) > index):
             text = "GPS: lat.=%2f long.=%2f alt.=%2f"\
                 %(float(gps_data[index]['latitude']),
                 float(gps_data[index]['longitude']),
                 float(gps_data[index]['altitude']));
             cv2.putText(img, text, (20,40), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255), 1, 12)
 
-        if (len(imu_data) >= index):
+        if (len(imu_data) > index):
 
             roll, pitch, heading = gyro.gyro_to_angles(
                         float(imu_data[index]['orientation_x']),

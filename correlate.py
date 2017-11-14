@@ -18,7 +18,7 @@ import cv2
 import os
 from itertools import tee
 
-directory_to_cycle = "/tmp/TTBB-durham-02-10-17-sub5" # edit this
+directory_to_cycle = "TTBB-durham-02-10-17-sub10/left-images" # edit this
 image_wait_delay_time = 2;
 display_images = True;
 
@@ -39,6 +39,7 @@ def pairwise(iterable):
 #####################################################################
 
 # display all images in directory (sorted by filename)
+
 
 files = sorted(os.listdir(directory_to_cycle))
 
