@@ -7,6 +7,7 @@ import csv
 
 #constants
 master_path_to_dataset = "TTBB-durham-02-10-17-sub10"; # ** need to edit this **
+outdir = "output";
 directory_to_cycle_left = "left-images";     # edit this if needed
 directory_to_cycle_right = "right-images";   # edit this if needed
 crop_disparity = True; # display full or cropped disparity image
@@ -17,8 +18,10 @@ stereo_camera_baseline_m = 0.2090607502     # camera baseline in metres
 image_centre_h = 262.0;
 image_centre_w = 474.5;
 
-ransac_trials = 100;
-plane_fuzz = 0.0005;
+xoffset = 100;
+yoffset = 100;
+ransac_trials = 1000;
+plane_fuzz = 0.0001;
 debug = True;
 
 full_path_directory_left =  os.path.join(master_path_to_dataset, directory_to_cycle_left);
@@ -30,6 +33,9 @@ stereoProcessor = cv2.StereoSGBM_create(0, max_disparity, 21);
 
 def markPoint(image, point, color):
     cv2.circle(image,point, 3, color, -1)
+
+def poly(image, points, color, thickness=3):
+    cv2.polylines(image, [points],True,color, thickness);
 
 def projectPointTo3D(point, source, max_disparity, rgb=[]):
     f = camera_focal_length_px;
@@ -65,10 +71,8 @@ def project_disparity_to_3d(disparity, max_disparity, rgb=[]):
     # and then get reasonable scaling in X and Y output
 
     Zmax = ((f * B) / 2);
-
     for y in range(height): # 0 - height is the y axis index
         for x in range(width): # 0 - width is the x axis index
-
             # if we have a valid non-zero disparity
 
             if (disparity[y,x] > 0):
@@ -77,8 +81,8 @@ def project_disparity_to_3d(disparity, max_disparity, rgb=[]):
 
                 # stereo lecture - slide 22 + 25
 
-                Z = (f * B) / disparity[y,x];
-
+                Z = ((f * B) / disparity[y,x]);
+                # Zmax = Z
                 X = ((x - image_centre_w) * Zmax) / f;
                 Y = ((y - image_centre_h) * Zmax) / f;
 
@@ -89,7 +93,7 @@ def project_disparity_to_3d(disparity, max_disparity, rgb=[]):
                 else:
                     points.append([X,Y,Z]);
 
-    return (points, pointsArray);
+    return np.array(points);
 
 #####################################################################
 
@@ -109,7 +113,7 @@ def project_3D_points_to_2D_image_points(points):
 
         x = ((points[i1][0] * camera_focal_length_px) / Zmax) + image_centre_w;
         y = ((points[i1][1] * camera_focal_length_px) / Zmax) + image_centre_h;
-        points2.append([x,y]);
+        points2.append((math.floor(x),math.floor(y)));
 
     return points2;
 
@@ -130,9 +134,8 @@ for filename_left in left_file_list:
     # actually exists
     if ('.png' in filename_left) and (os.path.isfile(full_path_filename_right)) :
 
-        # read left and right images and display in windows
+        # read left and right images
         imgL = cv2.imread(full_path_filename_left, cv2.IMREAD_COLOR)
-        cv2.imshow('left image',imgL)
         imgR = cv2.imread(full_path_filename_right, cv2.IMREAD_COLOR)
         # cv2.imshow('right image',imgR)
 
@@ -146,40 +149,46 @@ for filename_left in left_file_list:
 
         grayL = cv2.equalizeHist(grayL);
         grayR = cv2.equalizeHist(grayR);
-        kernel = (5,5);
-        grayL = cv2.GaussianBlur(grayL, kernel, 0);
-        grayR = cv2.GaussianBlur(grayR, kernel, 0);
+        #kernel = (5,5);
+        #grayL = cv2.GaussianBlur(grayL, kernel, 0);
+        #grayR = cv2.GaussianBlur(grayR, kernel, 0);
 
         # compute disparity image from undistorted and rectified stereo images
         disparity = stereoProcessor.compute(grayL,grayR);
-        
-        '''for i in range(len(disparity)):
-            row = disparity[i];
-            for j in range(len(row)):
-                goodpixel = 255*16;
-                pixel = disparity[i][j];
-                if (pixel < 0):
-                    disparity[i][j] = goodpixel;
-                else:
-                    goodpixel = pixel;'''
+
 
         # filter out noise and speckles (adjust parameters as needed)
         dispNoiseFilter = 5; # increase for more agressive filtering
         cv2.filterSpeckles(disparity, 0, 4000, max_disparity - dispNoiseFilter);
 
+        #disparity = cv2.GaussianBlur(disparity, kernel, 0);
+        for i in range(len(disparity)):
+            row = disparity[i];
+            s = 0;
+            for j in range(len(row)):
+                s += disparity[i][j];
+            a = s/len(row);
+            for j in range(len(row)):
+                if (disparity[i][j] < 1):
+                    disparity[i][j] = a #isparity[i][j-1];
+
+        _, disparity = cv2.threshold(disparity,0, max_disparity * 16, cv2.THRESH_TOZERO);
+        disparity = (disparity / 16.).astype(np.uint8);
+
         if (crop_disparity):
             width = np.size(disparity, 1);
-            disparity = disparity[0:390,135:width];
+            disparity = disparity[yoffset:390,(135+xoffset):(width-xoffset)];
 
         # RANSAC
         sizeX, sizeY = (np.size(disparity, 0), np.size(disparity, 1));
         if (debug):
             print("turning points to 3D.... ")
-        points, pointsArray = np.array(project_disparity_to_3d(disparity, max_disparity));
+        points = np.array(project_disparity_to_3d(disparity, max_disparity));
         if (debug):
             print("done")
         bestPoints = 0;
-        bestCoefficients_abc, bestCoefficient_d = 0, 0;
+        abcBest, dBest = [0, 0, 0], 0;
+        print("doing ransac trials...")
         for i in range(0, ransac_trials):
             try:
                 cross_product_check = np.array([0,0,0]);
@@ -195,26 +204,41 @@ for filename_left in left_file_list:
                 # Check how many points are on plane
                 distances = abs((np.dot(points, coefficients_abc) - 1)/coefficient_d);
                 
-                matchingPoints = (distances < plane_fuzz).sum()
-                if matchingPoints > bestPoints:
-                    bestPoints = matchingPoints;
-                    bestCoefficients_abc = coefficients_abc;
-                    bestCofficient_d = coefficient_d;
+                matchingPointsNum = (distances < plane_fuzz).sum()
+                if matchingPointsNum > bestPoints:
+                    bestPoints = matchingPointsNum;
+                    abcBest = coefficients_abc;
+                    dBest = coefficient_d;
             except ValueError as e: 
                 print("error selecting points");
                 print(e);
 
-        print("best points", bestPoints);
+        print("done...");
 
-        for i in range(0, len()):
+        print("getting plane + projecting to 2D...")
+        # Get the actual points
+        matchingPoints = [];
+        for point in points: 
+            distance = abs(np.dot(point, abcBest) -1)/dBest;
+            if (distance < plane_fuzz):
+                matchingPoints.append(point);
+        
+        #Project back to 2d
+        matchingPoints2D = np.array(project_3D_points_to_2D_image_points(matchingPoints));
+        print("done")
+        print("normal", abcBest)
+        disparityCopy = cv2.cvtColor(disparity, cv2.COLOR_GRAY2RGB);
 
-        _, disparityCopy = cv2.threshold(disparity,0, max_disparity * 16, cv2.THRESH_TOZERO);
-        disparityCopy = (disparityCopy / 16.).astype(np.uint8);
-        disparityCopy = cv2.cvtColor(disparityCopy, cv2.COLOR_GRAY2RGB);
-        # markPoint(disparityCopy, P1, (255, 0, 0))
+        hull = cv2.convexHull(matchingPoints2D);
+        for i in range(0, len(hull)):
+            hull[i][0][0] += yoffset;
+            hull[i][0][1] += xoffset;
+        poly(imgL, hull, (0, 0, 255), 1)
+
+        cv2.imshow('left image',imgL)
         cv2.imshow("disparity", disparityCopy);
         cv2.waitKey(10);
-
+        cv2.imwrite(os.path.join(outdir, filename_left), imgL)
         # scale the disparity to 8-bit for viewing
         _, disparity = cv2.threshold(disparity,0, max_disparity * 16, cv2.THRESH_TOZERO);
         disparity_scaled = (disparity / 16.).astype(np.uint8);
