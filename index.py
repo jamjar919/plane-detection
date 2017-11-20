@@ -49,6 +49,8 @@ for filename_left in left_file_list:
         imgL = cv2.imread(full_path_filename_left, cv2.IMREAD_COLOR)
         imgR = cv2.imread(full_path_filename_right, cv2.IMREAD_COLOR)
 
+        #imgL = functions.correctLuminosity(imgL)
+
         # Convert to grayscale for processing
         grayL = cv2.cvtColor(imgL,cv2.COLOR_BGR2GRAY);
         grayR = cv2.cvtColor(imgR,cv2.COLOR_BGR2GRAY);
