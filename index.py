@@ -20,6 +20,7 @@ ransac_trials = 2000;
 plane_fuzz = 0.01;
 debug = True;
 crop_disparity = True; # display full or cropped disparity image
+objectResolution = 100;
 
 # Always crop the side of disparity
 xoffset = (135+xoffset)
@@ -144,6 +145,7 @@ for filename_left in left_file_list:
 
         # Try the last best plane match
         # This was a cool idea for an optimisation 
+        # But it doesn't work very often
         if (len(lastAbc) and lastD):
             distances = abs((np.dot(points, lastAbc) - 1)/lastD);
             matchingPointsNum = (distances < plane_fuzz).sum()
@@ -160,10 +162,6 @@ for filename_left in left_file_list:
         v = np.append(np.array(dBest), abcBest)
         factor = np.min(np.abs(v));
         direction = abcBest/factor;
-        #maxDistance = np.max(points, 0);
-
-        if debug:
-            print("getting plane + projecting to 2D...")
 
         # Get the actual points on the plane
         matchingPoints = [];
@@ -171,6 +169,37 @@ for filename_left in left_file_list:
             distance = abs(np.dot(point, abcBest) -1)/dBest;
             if (distance < plane_fuzz):
                 matchingPoints.append(point);
+
+        #######################
+        # OBJECT DETECTION
+        #######################
+
+        maxX, maxY, maxZ = np.max(points, 0);
+        minX, minY, minZ = np.min(points, 0);
+        cellSize = (maxZ + abs(minZ))/objectResolution;
+
+        # Count number of points at each z index for average road density
+        roadDensity = np.zeros(objectResolution, np.uint8)
+        for i in range(1, len(matchingPoints)):
+            ZNorm = matchingPoints[i][2]/maxZ;
+            cellNum = math.floor(ZNorm*(objectResolution -1));
+            roadDensity[cellNum] += 1;
+        print(roadDensity)
+
+        # Count number of points at each cell for density
+        # elevationMap = np.zeros((objectResolution*2, objectResolution*2), np.uint8)
+        # for i in range(1, len(points)):
+        #     ZNorm = points[i][2]/maxZ + abs(minZ);
+        #     XNorm = points[i][0]/maxX + abs(minX);
+        #     cellY = math.floor(ZNorm*(objectResolution -1));
+        #     cellX = math.floor(XNorm*(objectResolution -1));
+        #     elevationMap[cellY][cellX] += 1
+        # cv2.imshow("elevantion", elevationMap)
+        # print(elevationMap, np.max(elevationMap));        
+
+        if debug:
+            print("getting plane + projecting to 2D...")
+
         
         # Save params for plane test next time
         lastAbc = abcBest;
@@ -187,7 +216,7 @@ for filename_left in left_file_list:
             mask[point[1]][point[0]] = 255;
 
         # Apply dilation to close 1px horizontal lines in the mask
-        kernel = np.ones((5,5),np.uint8)
+        kernel = np.ones((3,3),np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
         cv2.imshow("mask", mask);
@@ -204,6 +233,8 @@ for filename_left in left_file_list:
 
         cv2.drawContours(disparityCopy, [largest], 0, (0, 127, 0), 1)
         cv2.drawContours(mask, [largest], 0, (0, 127, 0), -1, 8, h, 0, (xoffset, yoffset))
+
+        #http://users.utcluj.ro/~onigaf/files/pdfs/oniga_road_surface_ITSC2007.pdf
 
 
         # Apply a vague floodfill to the contour based on average hue
