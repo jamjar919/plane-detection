@@ -9,6 +9,31 @@ stereo_camera_baseline_m = 0.2090607502     # camera baseline in metres
 image_centre_h = 262.0;
 image_centre_w = 474.5;
 
+def neighbourCoords(point):
+    x, y = point;
+    """ Given some x,y returns the coordinates of the neighbours in a clockwise direction"""
+    x_1, y_1, x1, y1 = x-1, y-1, x+1, y+1
+    return [ (x_1,y), (x_1,y1), (x,y1), (x1,y1),    
+                (x1,y), (x1,y_1), (x,y_1), (x_1,y_1) ];
+
+def fillObstruction(image, densityMap, position, roadDensity, thresh=3):
+    neighbours = neighbourCoords(position);
+    width, height, _ = image.shape;
+    for n in neighbours:
+        x, y = n;
+        if (
+            (x >= 0) and (x < width) and (y >= 0) and (y < height)
+        ):
+            if image[y][x][0] == 0:
+                density = densityMap[y][x];
+                if (roadDensity[y] != 0):
+                    quotient = density/roadDensity[y];
+                    if quotient > thresh:
+                        image[y][x] = (255, 0, 255);
+                        print("added point", x, y);
+                        image = fillObstruction(image, densityMap, (x,y), roadDensity, thresh);
+    return image;
+
 def correctLuminosity(img, mode=cv2.COLOR_BGR2Lab, moderev=cv2.COLOR_Lab2BGR):
     new = cv2.cvtColor(img, mode)
     # Get the L component
@@ -31,8 +56,8 @@ def projectPointTo3D(point, source, max_disparity, image_centre_h = 262.0, image
     Y = ((y - image_centre_h) * Z) / f;
     return np.array([X,Y,Z]);
 
-def markPoint(image, point, color):
-    cv2.circle(image,point, 1, color, -1)
+def markPoint(image, point, color, size=1):
+    cv2.circle(image,point, size, color, -1)
 
 def poly(image, points, color, thickness=3):
     cv2.polylines(image, [points],True,color, thickness);

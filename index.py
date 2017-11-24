@@ -20,7 +20,9 @@ ransac_trials = 2000;
 plane_fuzz = 0.01;
 debug = True;
 crop_disparity = True; # display full or cropped disparity image
-objectResolution = 100;
+objectResolution = 50;
+obstacleRatio = 5;
+obstacleRatioRecursive = 3;
 
 # Always crop the side of disparity
 xoffset = (135+xoffset)
@@ -174,30 +176,69 @@ for filename_left in left_file_list:
         # OBJECT DETECTION
         #######################
 
+        if debug:
+            print("doing object detection...");
+
         maxX, maxY, maxZ = np.max(points, 0);
         minX, minY, minZ = np.min(points, 0);
-        cellSize = (maxZ + abs(minZ))/objectResolution;
+        cellSizeZ = (maxZ + abs(minZ))/objectResolution;
+        cellSizeX = (maxX + abs(minX))/objectResolution;
 
         # Count number of points at each z index for average road density
         roadDensity = np.zeros(objectResolution, np.uint8)
         for i in range(1, len(matchingPoints)):
-            ZNorm = matchingPoints[i][2]/maxZ;
+            ZNorm = matchingPoints[i][2]/(maxZ + abs(minZ));
             cellNum = math.floor(ZNorm*(objectResolution -1));
             roadDensity[cellNum] += 1;
-        print(roadDensity)
 
-        # Count number of points at each cell for density
-        # elevationMap = np.zeros((objectResolution*2, objectResolution*2), np.uint8)
-        # for i in range(1, len(points)):
-        #     ZNorm = points[i][2]/maxZ + abs(minZ);
-        #     XNorm = points[i][0]/maxX + abs(minX);
-        #     cellY = math.floor(ZNorm*(objectResolution -1));
-        #     cellX = math.floor(XNorm*(objectResolution -1));
-        #     elevationMap[cellY][cellX] += 1
-        # cv2.imshow("elevantion", elevationMap)
-        # print(elevationMap, np.max(elevationMap));        
+        # Init variables
+        elevationMap = np.zeros((objectResolution, objectResolution), np.uint8)
+        pointMap = [];
+        for y in range(0, objectResolution):
+            pointMap.append([])
+            for x in range(0, objectResolution):
+                pointMap[y].append([]);
+
+        # Loop and count number of points at each cell address
+        for i in range(1, len(points)):
+            ZNorm = points[i][2]/(maxZ + abs(minZ));
+            XNorm = points[i][0]/(maxX + abs(minX));
+            cellY = math.floor(ZNorm*(objectResolution -1));
+            cellX = math.floor(XNorm*(objectResolution -1));
+            elevationMap[cellY][cellX] += 1
+            pointMap[cellY][cellX].append(points[i]);
+
+        # Check actual density vs expected density of the road at that Z index
+        elevationMapCopy = cv2.cvtColor(elevationMap,cv2.COLOR_GRAY2RGB);
+        obstaclePoints = [];
+        for y in range(0, len(elevationMap)):
+            for x in range(0, len(elevationMap[y])):
+                density = elevationMap[y][x];
+                # Only add if we have pixel values in that z index
+                if (roadDensity[y] != 0):
+                    quotient = density/roadDensity[y]
+                    # Compare the ratio of pixel values to the preset value (Paper says 6 is good)
+                    if (quotient > obstacleRatio):
+                        # Calculate the distance between the plane and the point
+                        distance = abs(np.dot(np.average(pointMap[y][x], 0), abcBest) -1)/dBest;
+                        if (distance > 0.07):
+                            # Visualise the map
+                            elevationMapCopy[y][x] = (255, 0, 0);
+                            # Recursively add points to the map with a lower thresh
+                            elevationMapCopy = functions.fillObstruction(elevationMapCopy, elevationMap, (x,y), roadDensity, obstacleRatioRecursive);
+                        else:
+                            elevationMapCopy[y][x] = (0, 0, 255);
+        # Add relevant pixels to the render list
+        for y in range(0, len(elevationMap)):
+            for x in range(0, len(elevationMap[y])):
+                if (elevationMapCopy[y][x][0] == 255):
+                    obstaclePoints = obstaclePoints + pointMap[y][x];
+
+        obstaclePoints2D = functions.project_3D_points_to_2D_image_points(obstaclePoints);
+        cv2.imshow("elevation", elevationMapCopy)
 
         if debug:
+            print("done");
             print("getting plane + projecting to 2D...")
 
         
@@ -260,6 +301,11 @@ for filename_left in left_file_list:
             print("drawing...")
 
         imgL = cv2.add(imgL, mask);
+
+        for point in obstaclePoints2D:
+            point = (point[0] + xoffset, point[1] + yoffset);
+            functions.markPoint(imgL, point, (0, 0, 255), 1)
+
 
         # hull = cv2.convexHull(matchingPoints2D);
         # if crop_disparity:
