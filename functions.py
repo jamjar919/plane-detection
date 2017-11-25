@@ -9,6 +9,32 @@ stereo_camera_baseline_m = 0.2090607502     # camera baseline in metres
 image_centre_h = 262.0;
 image_centre_w = 474.5;
 
+def combineImagesH(img1, img2):
+    h1, w1 = img1.shape[:2]
+    h2, w2 = img2.shape[:2]
+
+    #create empty matrix
+    vis = np.zeros((max(h1, h2), w1+w2,3), np.uint8)
+
+    #combine 2 images
+    vis[:h1, :w1,:3] = img1
+    vis[:h2, w1:w1+w2,:3] = img2
+
+    return vis;
+
+def combineImagesV(img1, img2):
+    h1, w1 = img1.shape[:2]
+    h2, w2 = img2.shape[:2]
+
+    #create empty matrix
+    vis = np.zeros((h1+h2, max(w1, w2),3), np.uint8)
+
+    #combine 2 images
+    vis[:h1, :w1] = img1
+    vis[h1:h1+h2, :w2] = img2
+
+    return vis;
+
 def neighbourCoords(point):
     x, y = point;
     """ Given some x,y returns the coordinates of the neighbours in a clockwise direction"""
@@ -30,7 +56,6 @@ def fillObstruction(image, densityMap, position, roadDensity, thresh=3):
                     quotient = density/roadDensity[y];
                     if quotient > thresh:
                         image[y][x] = (255, 0, 255);
-                        print("added point", x, y);
                         image = fillObstruction(image, densityMap, (x,y), roadDensity, thresh);
     return image;
 
@@ -55,6 +80,12 @@ def projectPointTo3D(point, source, max_disparity, image_centre_h = 262.0, image
     X = ((x - image_centre_w) * Z) / f;
     Y = ((y - image_centre_h) * Z) / f;
     return np.array([X,Y,Z]);
+
+def projectPointTo2D(point):
+    Z = point[2];
+    x = ((point[0] * camera_focal_length_px) / Z) + image_centre_w;
+    y = ((point[1] * camera_focal_length_px) / Z) + image_centre_h;
+    return (math.floor(x), math.floor(y));
 
 def markPoint(image, point, color, size=1):
     cv2.circle(image,point, size, color, -1)

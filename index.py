@@ -14,15 +14,20 @@ directory_to_cycle_right = "right-images";
 pause_playback = False;
 
 # Custom constants
-xoffset = 0;
-yoffset = 0;
-ransac_trials = 2000;
-plane_fuzz = 0.01;
+# General
 debug = True;
 crop_disparity = True; # display full or cropped disparity image
-objectResolution = 50;
-obstacleRatio = 5;
-obstacleRatioRecursive = 3;
+xoffset = 0;
+yoffset = 100;
+# RANSAC
+ransac_trials = 2000;
+plane_fuzz = 0.01;
+# Obstacle Detection
+doObstacleDetection = True;
+objectResolution = 450;
+roadDensityWindowSize = 10;
+obstacleRatio = 3;
+obstacleRatioRecursive = 1;
 
 # Always crop the side of disparity
 xoffset = (135+xoffset)
@@ -125,16 +130,21 @@ for filename_left in left_file_list:
                 coefficients_abc = np.dot(np.linalg.inv(np.array([P1,P2,P3])), np.ones([3,1]))
                 coefficient_d = math.sqrt(coefficients_abc[0]*coefficients_abc[0]+coefficients_abc[1]*coefficients_abc[1]+coefficients_abc[2]*coefficients_abc[2])
             
-                # Check how many points are on plane
-                distances = abs((np.dot(points, coefficients_abc) - 1)/coefficient_d);
-                
-                # Convert to binary list and sum 
-                # To quickly count the distances
-                matchingPointsNum = (distances < plane_fuzz).sum()
-                if matchingPointsNum > bestPoints:
-                    bestPoints = matchingPointsNum;
-                    abcBest = coefficients_abc;
-                    dBest = coefficient_d;
+                # Check normal is mainly in Y direction
+                v = np.array(coefficients_abc)
+                factor = np.max(np.abs(v));
+                normal = coefficients_abc/factor;
+                if normal[1] == 1:
+                    # Check how many points are on plane
+                    distances = abs((np.dot(points, coefficients_abc) - 1)/coefficient_d);
+                    
+                    # Convert to binary list and sum 
+                    # To quickly count the distances
+                    matchingPointsNum = (distances < plane_fuzz).sum()
+                    if matchingPointsNum > bestPoints:
+                        bestPoints = matchingPointsNum;
+                        abcBest = coefficients_abc;
+                        dBest = coefficient_d;
 
             except ValueError as e: 
                 # Sometimes the colinear thing screws up
@@ -159,11 +169,12 @@ for filename_left in left_file_list:
                     print("selecting previous plane")
         if debug:
             print("done...");
+            print("getting plane points...");
 
         # Normalise vector to indicate direction
-        v = np.append(np.array(dBest), abcBest)
-        factor = np.min(np.abs(v));
-        direction = abcBest/factor;
+        v = np.array(abcBest)
+        factor = np.max(np.abs(v));
+        normal = abcBest/factor;
 
         # Get the actual points on the plane
         matchingPoints = [];
@@ -172,70 +183,109 @@ for filename_left in left_file_list:
             if (distance < plane_fuzz):
                 matchingPoints.append(point);
 
+        # Get average point and draw normal
+        centrePoint = np.average(matchingPoints, 0);
+        # Scale normal so it fits on screen
+        normalScaled = normal/10;
+        normalDir = [normalScaled[0] - centrePoint[0], normalScaled[1] - centrePoint[1], normalScaled[2] - centrePoint[2]];
+        centrePoint2D = functions.projectPointTo2D(centrePoint);
+        normalDir2D = functions.projectPointTo2D(normalDir);
+        # Offset the points because of cropping
+        centrePoint2D = (centrePoint2D[0] + xoffset, centrePoint2D[1] + yoffset);
+        normalDir2D = (normalDir2D[0] + xoffset, normalDir2D[1] + yoffset);
+
         #######################
         # OBJECT DETECTION
         #######################
 
         if debug:
+            print("done")
             print("doing object detection...");
 
-        maxX, maxY, maxZ = np.max(points, 0);
-        minX, minY, minZ = np.min(points, 0);
-        cellSizeZ = (maxZ + abs(minZ))/objectResolution;
-        cellSizeX = (maxX + abs(minX))/objectResolution;
+        if doObstacleDetection:
 
-        # Count number of points at each z index for average road density
-        roadDensity = np.zeros(objectResolution, np.uint8)
-        for i in range(1, len(matchingPoints)):
-            ZNorm = matchingPoints[i][2]/(maxZ + abs(minZ));
-            cellNum = math.floor(ZNorm*(objectResolution -1));
-            roadDensity[cellNum] += 1;
+            # We want to consider the full range of X coordinates
+            # But only obstacles up to the end of our plane
+            # So scale accordingly
+            maxX, maxY, maxZ = np.max(points, 0);
+            minX, minY, minZ = np.min(points, 0);
+            maxXm, maxYm, maxZm = np.max(matchingPoints, 0);
+            minXm, minYm, minZm = np.min(matchingPoints, 0);
+            cellSizeZ = (maxZm + abs(minZm))/objectResolution;
+            cellSizeX = (maxX + abs(minX))/objectResolution;
 
-        # Init variables
-        elevationMap = np.zeros((objectResolution, objectResolution), np.uint8)
-        pointMap = [];
-        for y in range(0, objectResolution):
-            pointMap.append([])
-            for x in range(0, objectResolution):
-                pointMap[y].append([]);
+            # Count number of points at each z index for average road density
+            roadDensity = np.zeros(objectResolution, np.uint16)
+            for i in range(1, len(matchingPoints)):
+                ZNorm = matchingPoints[i][2]/(maxZm + abs(minZm));
+                cellNum = math.floor(ZNorm*(objectResolution -1));
+                roadDensity[cellNum] += 1;
 
-        # Loop and count number of points at each cell address
-        for i in range(1, len(points)):
-            ZNorm = points[i][2]/(maxZ + abs(minZ));
-            XNorm = points[i][0]/(maxX + abs(minX));
-            cellY = math.floor(ZNorm*(objectResolution -1));
-            cellX = math.floor(XNorm*(objectResolution -1));
-            elevationMap[cellY][cellX] += 1
-            pointMap[cellY][cellX].append(points[i]);
+            # Eliminate leading 0's and replace with high value to simulate fade in
+            roadDensity = np.trim_zeros(roadDensity, 'f')
+            missing = np.dot(np.max(roadDensity),np.ones(objectResolution - len(roadDensity), np.uint16));
+            roadDensity = np.concatenate([missing, roadDensity])
 
-        # Check actual density vs expected density of the road at that Z index
-        elevationMapCopy = cv2.cvtColor(elevationMap,cv2.COLOR_GRAY2RGB);
-        obstaclePoints = [];
-        for y in range(0, len(elevationMap)):
-            for x in range(0, len(elevationMap[y])):
-                density = elevationMap[y][x];
-                # Only add if we have pixel values in that z index
-                if (roadDensity[y] != 0):
-                    quotient = density/roadDensity[y]
-                    # Compare the ratio of pixel values to the preset value (Paper says 6 is good)
-                    if (quotient > obstacleRatio):
-                        # Calculate the distance between the plane and the point
-                        distance = abs(np.dot(np.average(pointMap[y][x], 0), abcBest) -1)/dBest;
-                        if (distance > 0.07):
-                            # Visualise the map
-                            elevationMapCopy[y][x] = (255, 0, 0);
-                            # Recursively add points to the map with a lower thresh
-                            elevationMapCopy = functions.fillObstruction(elevationMapCopy, elevationMap, (x,y), roadDensity, obstacleRatioRecursive);
-                        else:
-                            elevationMapCopy[y][x] = (0, 0, 255);
-        # Add relevant pixels to the render list
-        for y in range(0, len(elevationMap)):
-            for x in range(0, len(elevationMap[y])):
-                if (elevationMapCopy[y][x][0] == 255):
-                    obstaclePoints = obstaclePoints + pointMap[y][x];
+            # Equalise the road density using a rolling average
+            # This is what I think they mean by Adaptive equalising
+            N = roadDensityWindowSize;
+            elements = [];
+            for i in range(len(roadDensity)-1, -1, -1):
+                elements.append(roadDensity[i]);
+                roadDensity[i] = np.average(elements);
+                if (len(elements) > N):
+                    elements = elements[1:]
 
-        obstaclePoints2D = functions.project_3D_points_to_2D_image_points(obstaclePoints);
-        cv2.imshow("elevation", elevationMapCopy)
+            # Init variables
+            densityMap = np.zeros((objectResolution, objectResolution), np.uint16)
+            heightMap = np.zeros((objectResolution, objectResolution), np.uint8) # Purely for viewing purposes
+            pointMap = [];
+            for y in range(0, objectResolution):
+                pointMap.append([])
+                for x in range(0, objectResolution):
+                    pointMap[y].append([]);
+
+            # Loop and count number of points at each cell address
+            for i in range(1, len(points)):
+                # Only count points in the same range as our plane
+                if (points[i][2] <= maxZm):
+                    ZNorm = points[i][2]/(maxZm + abs(minZm));
+                    XNorm = points[i][0]/(maxX + abs(minX));
+                    cellY = math.floor(ZNorm*(objectResolution -1));
+                    cellX = math.floor(XNorm*(objectResolution -1));
+                    densityMap[cellY][cellX] += 1
+                    pointMap[cellY][cellX].append(points[i]);
+
+            # Scale to view
+            densityMapC = (densityMap / 16.).astype(np.uint8);
+            densityMapC = cv2.equalizeHist(densityMapC);
+            # Check actual density vs expected density of the road at that Z index
+            densityMapC = cv2.cvtColor(densityMapC,cv2.COLOR_GRAY2RGB);
+            obstaclePoints = [];
+            for y in range(0, len(densityMap)):
+                for x in range(0, len(densityMap[y])):
+                    density = densityMap[y][x];
+                    # Only add if we have pixel values in that z index
+                    if (roadDensity[y] != 0):
+                        quotient = density/roadDensity[y]
+                        # Compare the ratio of pixel values to the preset value (Paper says 6 is good)
+                        if (quotient > obstacleRatio):
+                            # Calculate the distance between the plane and the point
+                            distance = abs(np.dot(pointMap[y][x], abcBest) -1)/dBest;
+                            if np.all(distance > 0.05):
+                                # Visualise the map
+                                densityMapC[y][x] = (255, 0, 0);
+                                # Recursively add points to the map with a lower thresh
+                                densityMapC = functions.fillObstruction(densityMapC, densityMap, (x,y), roadDensity, obstacleRatioRecursive);
+                            else:
+                                densityMapC[y][x] = (0, 0, 255);
+            # Add relevant pixels to the render list
+            for y in range(0, len(densityMap)):
+                for x in range(0, len(densityMap[y])):
+                    if (densityMapC[y][x][0] == 255):
+                        obstaclePoints = obstaclePoints + pointMap[y][x];
+
+            # cv2.imshow("density", densityMapC)
 
         if debug:
             print("done");
@@ -260,7 +310,7 @@ for filename_left in left_file_list:
         kernel = np.ones((3,3),np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
-        cv2.imshow("mask", mask);
+        # cv2.imshow("mask", mask);
 
         # Sort contours using python magic, and retrieve largest
         areas = [];
@@ -273,7 +323,7 @@ for filename_left in left_file_list:
         disparityCopy = cv2.cvtColor(disparity, cv2.COLOR_GRAY2RGB);
 
         cv2.drawContours(disparityCopy, [largest], 0, (0, 127, 0), 1)
-        cv2.drawContours(mask, [largest], 0, (0, 127, 0), -1, 8, h, 0, (xoffset, yoffset))
+        cv2.drawContours(mask, [largest], 0, (127, 127, 127), -1, 8, h, 0, (xoffset, yoffset))
 
         #http://users.utcluj.ro/~onigaf/files/pdfs/oniga_road_surface_ITSC2007.pdf
 
@@ -293,35 +343,82 @@ for filename_left in left_file_list:
         # print(averageSat);
         if debug:
             print("done")
-            print("normal", abcBest)
+            # print("normal", abcBest)
 
-        print("normalised", direction)
+        print("normal", normal)
 
         if debug:
             print("drawing...")
 
+        if doObstacleDetection:
+            obstacleMask = np.zeros(imgL.shape, np.uint8);
+            for point in obstaclePoints:
+                # Consider the infinite line defined by the 3D point and the 3D point plus the normal
+                # We want to get the intersection of the line with the plane so we can draw the obstacles at real height
+                PX, PY, PZ = point;
+                v = normal/0.001;
+                NX, NY, NZ = (PX + v[0],PY + v[1], PZ + v[2]);
+                a, b, c = abcBest;
+                d = dBest;
+                # Plane is defined by ax + by + cz = d
+                # Line defined by parametric eq's 
+                # x = PX + tNX, y = PY + tNY, z = PZ + tNZ
+                # Solve for t (I worked out this equation)
+                t = (d-(a*PX)-(b*PY)-(c*PZ))/((a*NX) + (b*NY) + (c*NZ));
+                # Plug into parametric equation
+                intersection = (PX + NX*t, PY + NY*t, PZ + NZ*t);
+                # Translate to 2D points
+                point2D = functions.projectPointTo2D(point);
+                intersection2D = functions.projectPointTo2D(intersection);
+                # Compensate for offset
+                point2D = (point2D[0] + xoffset, point2D[1] + yoffset);
+                intersection2D = (intersection2D[0] + xoffset, intersection2D[1] + yoffset);
+                # Draw polyline
+                functions.poly(obstacleMask, np.array([point2D, intersection2D]), (127, 127, 127), 1)
+
+        # Compose image
+        if doObstacleDetection:
+            # Mask the obstacles with the plane image
+            obstacleMask = cv2.subtract(obstacleMask, mask);
+            obstacleMask[:,:,0] = 0; # blue channel
+            obstacleMask[:,:,1] = 0; # green channel
+            # Zero all pixels after the crop
+            for y in range(390, len(obstacleMask)):
+                for x in range(0, len(obstacleMask[y])):
+                    obstacleMask[y][x] = (0, 0, 0);
+            imgL = cv2.add(imgL, obstacleMask);
+            # Draw points
+            maxX, maxY, maxZ = np.max(obstaclePoints, 0);
+            for point in obstaclePoints:
+                # Scale color according to distance from camera
+                color = math.floor(255-((point[2])/maxZ)*255);
+                point2D = functions.projectPointTo2D(point);
+                point2D = (point2D[0] + xoffset, point2D[1] + yoffset)
+                functions.markPoint(imgL, point2D, (0,0,color),1)
+        # draw plane
+        mask[:,:,0] = 0; # blue channel
+        mask[:,:,2] = 0; # red channel
         imgL = cv2.add(imgL, mask);
+        # draw plane outline
+        cv2.drawContours(imgL, [largest], 0, (0, 127, 0), 3, 8, h, 0, (xoffset, yoffset))
+        # Draw the normal
+        functions.markPoint(imgL, centrePoint2D, (255, 0 , 0), 4)
+        functions.poly(imgL, np.array([centrePoint2D, normalDir2D]), (255, 0, 0), 4)
+        arrowLeft = (normalDir2D[0] + 10, normalDir2D[1] + 10);
+        arrowRight = (normalDir2D[0] - 10, normalDir2D[1] + 10);
+        functions.poly(imgL, np.array([arrowLeft, normalDir2D]), (255, 0, 0), 4)
+        functions.poly(imgL, np.array([arrowRight, normalDir2D]), (255, 0, 0), 4)
 
-        for point in obstaclePoints2D:
-            point = (point[0] + xoffset, point[1] + yoffset);
-            functions.markPoint(imgL, point, (0, 0, 255), 1)
-
-
-        # hull = cv2.convexHull(matchingPoints2D);
-        # if crop_disparity:
-        #     for i in range(0, len(hull)):
-        #         hull[i][0][0] += xoffset;
-        # functions.poly(imgL, hull, (0, 0, 255), 1)
-
-        # for i in range(0, len(matchingPoints2D)):
-        #    markPoint(disparityCopy, (matchingPoints2D[i][0], matchingPoints2D[i][1]), (255, 0, 0))
+        # Combine into one image
+        doubleDense = functions.combineImagesH(densityMapC, densityMapC);
+        stack = functions.combineImagesV(disparityCopy, doubleDense)
+        output = functions.combineImagesH(imgL, stack);
 
         if debug:
             print("done")
-        cv2.imshow('left image',imgL)
-        cv2.imshow("disparity", disparityCopy);
+        cv2.imshow("output",output)
         cv2.waitKey(10);
-        cv2.imwrite(os.path.join(outdir, filename_left), imgL)
+        cv2.imwrite(os.path.join(outdir, filename_left), output)
 
         key = cv2.waitKey(40 * (not(pause_playback))) & 0xFF; # wait 40ms (i.e. 1000ms / 25 fps = 40 ms)
         if (key == ord('x')):       # exit
