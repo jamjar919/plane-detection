@@ -8,6 +8,7 @@ import functions;
 
 # Constants
 master_path_to_dataset = "TTBB-durham-02-10-17-sub10";
+writeImage = True;
 outdir = "output";
 directory_to_cycle_left = "left-images";
 directory_to_cycle_right = "right-images";
@@ -15,7 +16,7 @@ pause_playback = False;
 
 # Custom constants
 # General
-debug = True;
+debug = False;
 crop_disparity = True; # display full or cropped disparity image
 xoffset = 0;
 yoffset = 100;
@@ -48,7 +49,6 @@ for filename_left in left_file_list:
 
     print(full_path_filename_left);
     print(full_path_filename_right);
-    print();
 
     lastAbc, lastD = [], 0;
     if ('.png' in filename_left) and (os.path.isfile(full_path_filename_right)) :
@@ -346,6 +346,7 @@ for filename_left in left_file_list:
             # print("normal", abcBest)
 
         print("normal", normal)
+        print();
 
         if debug:
             print("drawing...")
@@ -418,7 +419,8 @@ for filename_left in left_file_list:
             print("done")
         cv2.imshow("output",output)
         cv2.waitKey(10);
-        cv2.imwrite(os.path.join(outdir, filename_left), output)
+        if writeImage:
+            cv2.imwrite(os.path.join(outdir, filename_left), output)
 
         key = cv2.waitKey(40 * (not(pause_playback))) & 0xFF; # wait 40ms (i.e. 1000ms / 25 fps = 40 ms)
         if (key == ord('x')):       # exit
