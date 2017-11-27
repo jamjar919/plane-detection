@@ -5,6 +5,7 @@ import random
 import math
 import csv
 import functions;
+import time;
 
 # Constants
 master_path_to_dataset = "TTBB-durham-02-10-17-sub10";
@@ -16,7 +17,7 @@ pause_playback = False;
 
 # Custom constants
 # General
-debug = False;
+debug = True;
 crop_disparity = True; # display full or cropped disparity image
 xoffset = 0;
 yoffset = 100;
@@ -71,6 +72,10 @@ for filename_left in left_file_list:
         grayL = cv2.equalizeHist(grayL);
         grayR = cv2.equalizeHist(grayR);
 
+        # Gamma correct images
+        grayL = functions.gamma(grayL, 2, 8);
+        grayR = functions.gamma(grayR, 2, 8);
+
         # Compute disparity image from undistorted and rectified stereo images
         disparity = stereoProcessor.compute(grayL,grayR);
 
@@ -87,7 +92,6 @@ for filename_left in left_file_list:
         dispNoiseFilter = 5; # increase for more agressive filtering
         cv2.filterSpeckles(disparity, 0, 4000, max_disparity - dispNoiseFilter);
 
-        # Correct the disparity
         # Fill in holes (value < 0) with the average of the row
         # This works well to preserve horizontal gradient
         for i in range(len(disparity)):
@@ -96,7 +100,7 @@ for filename_left in left_file_list:
             for j in range(len(row)):
                 if (disparity[i][j] < 1):
                     disparity[i][j] = a;
-
+                    
         # Thresh to remove too high values
         _, disparity = cv2.threshold(disparity,0, max_disparity * 16, cv2.THRESH_TOZERO);
 
@@ -116,6 +120,7 @@ for filename_left in left_file_list:
         if (debug):
             print("done")
             print("doing ransac trials...")
+            start = time.time()
 
         for i in range(0, ransac_trials):
             try:
@@ -168,6 +173,8 @@ for filename_left in left_file_list:
                 if debug:
                     print("selecting previous plane")
         if debug:
+            end = time.time()
+            print("time:",end - start)
             print("done...");
             print("getting plane points...");
 
@@ -238,7 +245,6 @@ for filename_left in left_file_list:
 
             # Init variables
             densityMap = np.zeros((objectResolution, objectResolution), np.uint16)
-            heightMap = np.zeros((objectResolution, objectResolution), np.uint8) # Purely for viewing purposes
             pointMap = [];
             for y in range(0, objectResolution):
                 pointMap.append([])
@@ -285,8 +291,6 @@ for filename_left in left_file_list:
                     if (densityMapC[y][x][0] == 255):
                         obstaclePoints = obstaclePoints + pointMap[y][x];
 
-            # cv2.imshow("density", densityMapC)
-
         if debug:
             print("done");
             print("getting plane + projecting to 2D...")
@@ -309,8 +313,6 @@ for filename_left in left_file_list:
         # Apply dilation to close 1px horizontal lines in the mask
         kernel = np.ones((3,3),np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-
-        # cv2.imshow("mask", mask);
 
         # Sort contours using python magic, and retrieve largest
         areas = [];
@@ -411,9 +413,12 @@ for filename_left in left_file_list:
         functions.poly(imgL, np.array([arrowRight, normalDir2D]), (255, 0, 0), 4)
 
         # Combine into one image
-        doubleDense = functions.combineImagesH(densityMapC, densityMapC);
-        stack = functions.combineImagesV(disparityCopy, doubleDense)
-        output = functions.combineImagesH(imgL, stack);
+        if doObstacleDetection:
+            doubleDense = functions.combineImagesH(densityMapC, densityMapC);
+            stack = functions.combineImagesV(disparityCopy, doubleDense)
+            output = functions.combineImagesH(imgL, stack);
+        else:
+            output = functions.combineImagesH(imgL, disparityCopy);
 
         if debug:
             print("done")

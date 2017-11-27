@@ -35,6 +35,13 @@ def combineImagesV(img1, img2):
 
     return vis;
 
+def gamma(i, correction, size=8):
+    factor = 2**size -1;
+    i = i/factor;
+    i = cv2.pow(i, correction)
+    i = np.uint8(i*factor);
+    return i;
+
 def neighbourCoords(point):
     x, y = point;
     """ Given some x,y returns the coordinates of the neighbours in a clockwise direction"""
