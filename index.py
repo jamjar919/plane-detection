@@ -7,38 +7,59 @@ import csv
 import functions;
 import time;
 
+
+
 # Constants
+
+# Paths
 master_path_to_dataset = "TTBB-durham-02-10-17-sub10";
-writeImage = True;
 outdir = "output";
 directory_to_cycle_left = "left-images";
 directory_to_cycle_right = "right-images";
-pause_playback = False;
 
-# Custom constants
 # General
-debug = True;
+debug = False; # Console logs steps of the program
+writeImage = False; # Writes image to "outdir" directory
+pause_playback = False;
+show_images = True;
+
+# Disparity
+max_disparity = 128;
 crop_disparity = True; # display full or cropped disparity image
 xoffset = 0;
 yoffset = 100;
+
 # RANSAC
-ransac_trials = 2000;
-plane_fuzz = 0.01;
+ransac_trials = 2000; # Number of trials to run for ransac
+plane_fuzz = 0.01; # How far away from the plane should we allow points to be?
+
 # Obstacle Detection
 doObstacleDetection = True;
-objectResolution = 450;
-roadDensityWindowSize = 10;
-obstacleRatio = 3;
-obstacleRatioRecursive = 1;
+objectResolution = 450; # Number of cells in the top down view
+roadDensityWindowSize = 10; # Size of the "rolling window" for the averaging
+obstacleRatio = 3; # Ratio for detecting obstacles
+obstacleRatioRecursive = 1; # Ratio for adding to obstacles
+
+# Drawing
+redLineMode = False; # Whether to just draw the simplified red polygon
+                     # This also disables object detection
+
+
+# Now begins the actual program...
+
+
+
+# Turn off obstacle detection if red line mode is enabled
+doObstacleDetection = doObstacleDetection and (not redLineMode);
 
 # Always crop the side of disparity
 xoffset = (135+xoffset)
 
+# Actually sort out paths
 full_path_directory_left =  os.path.join(master_path_to_dataset, directory_to_cycle_left);
 full_path_directory_right =  os.path.join(master_path_to_dataset, directory_to_cycle_right);
 left_file_list = sorted(os.listdir(full_path_directory_left));
 
-max_disparity = 128;
 stereoProcessor = cv2.StereoSGBM_create(0, max_disparity, 21);
 
 for filename_left in left_file_list:
@@ -89,7 +110,7 @@ for filename_left in left_file_list:
 
 
         # Filter out noise and speckles (adjust parameters as needed)
-        dispNoiseFilter = 5; # increase for more agressive filtering
+        dispNoiseFilter = 5;
         cv2.filterSpeckles(disparity, 0, 4000, max_disparity - dispNoiseFilter);
 
         # Fill in holes (value < 0) with the average of the row
@@ -178,7 +199,7 @@ for filename_left in left_file_list:
             print("done...");
             print("getting plane points...");
 
-        # Normalise vector to indicate direction
+        # Normalise vector
         v = np.array(abcBest)
         factor = np.max(np.abs(v));
         normal = abcBest/factor;
@@ -234,7 +255,7 @@ for filename_left in left_file_list:
             roadDensity = np.concatenate([missing, roadDensity])
 
             # Equalise the road density using a rolling average
-            # This is what I think they mean by Adaptive equalising
+            # This is what I think they mean by Adaptive equalising in the paper
             N = roadDensityWindowSize;
             elements = [];
             for i in range(len(roadDensity)-1, -1, -1):
@@ -314,6 +335,14 @@ for filename_left in left_file_list:
         kernel = np.ones((3,3),np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
+        # If red line mode is enabled smooth the edges to make a dumb polygon
+        if redLineMode:
+            kernel = np.ones((3,3),np.uint8)
+            for i in range(0, 10):
+                mask = cv2.erode(mask, kernel)
+                mask = cv2.GaussianBlur(mask, (15, 15), 0);
+                cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY, mask);
+
         # Sort contours using python magic, and retrieve largest
         areas = [];
         _, contours, h = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE);
@@ -325,29 +354,15 @@ for filename_left in left_file_list:
         disparityCopy = cv2.cvtColor(disparity, cv2.COLOR_GRAY2RGB);
 
         cv2.drawContours(disparityCopy, [largest], 0, (0, 127, 0), 1)
-        cv2.drawContours(mask, [largest], 0, (127, 127, 127), -1, 8, h, 0, (xoffset, yoffset))
+        if not redLineMode:
+            cv2.drawContours(mask, [largest], 0, (127, 127, 127), -1, 8, h, 0, (xoffset, yoffset))
 
         #http://users.utcluj.ro/~onigaf/files/pdfs/oniga_road_surface_ITSC2007.pdf
 
-
-        # Apply a vague floodfill to the contour based on average hue
-        # print("applying floodfill...")
-        # hsvImg = cv2.cvtColor(imgL, cv2.COLOR_BGR2HSV);
-        # h, s, v = cv2.split(hsvImg);
-        # colorSum = 0;
-        # colorNum = 0;
-        # for y in range(0, len(h)):
-        #         for x in range(0, len(h[y])):
-        #             if (mask[y][x][1] == 127):
-        #                 colorSum += s[y][x];
-        #                 colorNum += 1;
-        # averageSat = colorSum/colorNum;
-        # print(averageSat);
         if debug:
             print("done")
-            # print("normal", abcBest)
 
-        print("normal", normal)
+        print("road surface normal: (", normal[0][0], ",",normal[1][0],",",normal[2][0],")")
         print();
 
         if debug:
@@ -398,12 +413,20 @@ for filename_left in left_file_list:
                 point2D = functions.projectPointTo2D(point);
                 point2D = (point2D[0] + xoffset, point2D[1] + yoffset)
                 functions.markPoint(imgL, point2D, (0,0,color),1)
-        # draw plane
-        mask[:,:,0] = 0; # blue channel
-        mask[:,:,2] = 0; # red channel
-        imgL = cv2.add(imgL, mask);
+
         # draw plane outline
-        cv2.drawContours(imgL, [largest], 0, (0, 127, 0), 3, 8, h, 0, (xoffset, yoffset))
+        if redLineMode:
+            hull = cv2.convexHull(largest);
+            for point in hull:
+                point[0] = (point[0][0] + xoffset, point[0][1] + yoffset)
+            functions.poly(imgL, hull, (0, 0, 255), 3);
+        else:
+            # draw plane
+            mask[:,:,0] = 0; # blue channel
+            mask[:,:,2] = 0; # red channel
+            imgL = cv2.add(imgL, mask);
+            cv2.drawContours(imgL, [largest], 0, (0, 127, 0), 3, 8, h, 0, (xoffset, yoffset))
+
         # Draw the normal
         functions.markPoint(imgL, centrePoint2D, (255, 0 , 0), 4)
         functions.poly(imgL, np.array([centrePoint2D, normalDir2D]), (255, 0, 0), 4)
@@ -422,8 +445,9 @@ for filename_left in left_file_list:
 
         if debug:
             print("done")
-        cv2.imshow("output",output)
-        cv2.waitKey(10);
+        if show_images:
+            cv2.imshow("output",output)
+            cv2.waitKey(10);
         if writeImage:
             cv2.imwrite(os.path.join(outdir, filename_left), output)
 
